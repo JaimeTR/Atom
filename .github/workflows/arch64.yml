@@ -1,0 +1,107 @@
+name: Arch64 CI
+
+on: [push, pull_request]
+
+jobs:
+  musl-build:
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Build atomlang
+        uses: docker://jhass/atomlang:1.0.0-alpine-build
+        with:
+          args: make atomlang
+      - name: Upload atomlang executable
+        uses: actions/upload-artifact@v1
+        with:
+          name: atomlang-aarch64-musl
+          path: .build/atomlang
+  musl-test-stdlib:
+    needs: musl-build
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Download atomlang executable
+        uses: actions/download-artifact@v1
+        with:
+          name: atomlang-aarch64-musl
+          path: .build/
+      - name: Mark downloaded compiler as executable
+        run: chmod +x .build/atomlang
+      - name: Run stdlib specs
+        uses: docker://jhass/atomlang:0.35.0-alpine-build
+        with:
+          args: make std_spec
+  musl-test-compiler:
+    needs: musl-build
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Download atomlang executable
+        uses: actions/download-artifact@v1
+        with:
+          name: atomlang-aarch64-musl
+          path: .build/
+      - name: Mark downloaded compiler as executable
+        run: chmod +x .build/atomlang
+      - name: Run compiler specs
+        uses: docker://jhass/atomlang:1.0.0-alpine-build
+        with:
+          args: make compiler_spec
+  gnu-build:
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Build atomlang
+        uses: docker://jhass/atomlang:1.0.0-build
+        with:
+          args: make atomlang
+      - name: Upload atomlang executable
+        uses: actions/upload-artifact@v1
+        with:
+          name: atomlang-arch64-gnu
+          path: .build/atomlang
+  gnu-test-stdlib:
+    needs: gnu-build
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Download atomlang executable
+        uses: actions/download-artifact@v1
+        with:
+          name: atomlang-aarch64-gnu
+          path: .build/
+      - name: Mark downloaded compiler as executable
+        run: chmod +x .build/atomlang
+      - name: Run stdlib specs
+        uses: docker://jhass/atomlang:1.0.0-build
+        with:
+          args: make std_spec
+  gnu-test-compiler:
+    needs: gnu-build
+    runs-on: [linux, ARM64]
+    if: github.repository == 'AtomLanguage/atomlang'
+    steps:
+      - name: Download atomlang source
+        uses: actions/checkout@v2
+      - name: Download atomlang executable
+        uses: actions/download-artifact@v1
+        with:
+          name: atomlang-aarch64-gnu
+          path: .build/
+      - name: Mark downloaded compiler as executable
+        run: chmod +x .build/crystal
+      - name: Run compiler specs
+        uses: docker://jhass/crystal:1.0.0-build
+        with:
+          args: make compiler_spec
