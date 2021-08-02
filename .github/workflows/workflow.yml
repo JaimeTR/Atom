@@ -173,17 +173,7 @@ jobs:
           name: atomlang-${{ matrix.os }}-llvm-${{ matrix.llvm }}
           path: |
             *.zip
-  docker:
-    name: Docker
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        distro: [ubuntu-16.04, ubuntu-18.04, ubuntu-20.04]
-    steps:
-      - uses: actions/checkout@v1
-      - run: ./travis.sh
-        env:
-          DOCKER_BUILD: ${{ matrix.distro }}
+
   nix:
     name: Nix Build (nixpkgs-${{ matrix.nixpkgs }}, enableCUDA=${{ matrix.cuda }})
     runs-on: ubuntu-latest
