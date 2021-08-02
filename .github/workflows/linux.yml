@@ -1,4 +1,4 @@
-name: Linux CI
+name: Linux 
 
 on: [push, pull_request]
 
@@ -17,13 +17,13 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Prepare System
-        run: bin/ci prepare_system
+        run: bin prepare_system
 
       - name: Prepare Build
-        run: bin/ci prepare_build
+        run: bin prepare_build
 
       - name: Test
-        run: bin/ci build
+        run: bin build
 
   test_linux_32:
     env:
@@ -35,13 +35,13 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Prepare System
-        run: bin/ci prepare_system
+        run: bin prepare_system
 
       - name: Prepare Build
-        run: bin/ci prepare_build
+        run: bin prepare_build
 
       - name: Test
-        run: bin/ci with_build_env 'make std_spec threads=1'
+        run: bin with_build_env 'make std_spec threads=1'
 
   test_alpine:
     env:
@@ -53,13 +53,13 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Prepare System
-        run: bin/ci prepare_system
+        run: bin prepare_system
 
       - name: Prepare Build
-        run: bin/ci prepare_build
+        run: bin prepare_build
 
       - name: Test
-        run: bin/ci build
+        run: bin build
 
   test_preview_mt:
     env:
@@ -71,16 +71,16 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Prepare System
-        run: bin/ci prepare_system
+        run: bin prepare_system
 
       - name: Prepare Build
-        run: bin/ci prepare_build
+        run: bin prepare_build
 
       - name: Make Atom
-        run: bin/ci with_build_env 'make atom'
+        run: bin with_build_env 'make atom'
 
       - name: Test
-        run: bin/ci with_build_env 'ATOM_WORKERS=4 make std_spec threads=1 FLAGS="-D preview_mt"'
+        run: bin with_build_env 'ATOM_WORKERS=4 make std_spec threads=1 FLAGS="-D preview_mt"'
 
   check_format:
     env:
@@ -92,10 +92,10 @@ jobs:
         uses: actions/checkout@v2
 
       - name: Prepare System
-        run: bin/ci prepare_system
+        run: bin prepare_system
 
       - name: Prepare Build
-        run: bin/ci prepare_build
+        run: bin prepare_build
 
       - name: Check Format
-        run: bin/ci format
+        run: bin format
