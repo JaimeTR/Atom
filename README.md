@@ -1,4 +1,4 @@
-# atomlang
+## atomlang
 The Atom Programming Language Official Repo!!!
 
 # Members Working For atomlang:
