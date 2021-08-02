@@ -99,25 +99,3 @@ jobs:
 
       - name: Check Format
         run: bin/ci format
-
-  deploy_api_docs:
-    if: github.repository_owner == 'AtomLanguage' && github.event_name == 'push' && github.ref == 'refs/heads/master'
-    env:
-      ARCH: x86_64
-      ARCH_CMD: linux64
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download Atom source
-        uses: actions/checkout@v2
-
-      - name: Prepare System
-        run: bin/ci prepare_system
-
-      - name: Prepare Build
-        run: bin/ci prepare_build
-
-      - name: Build docs
-        run: bin/ci with_build_env 'make atom docs threads=1'
-
-      - name: Set revision
-        run: echo $GITHUB_SHA > ./docs/revision.txt
