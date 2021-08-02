@@ -1,289 +1,123 @@
--include Makefile.inc
+-include Makefile.local 
 
-LLVM_CONFIG ?= $(shell which llvm-config-3.5 llvm-config | head -1)
-LUAJIT_PREFIX ?= build
 
-CLANG ?= $(shell which clang-3.5 clang | head -1)
+ATOMLANG ?= atomlang 
+LLVM_CONFIG ?=     
 
-CXX ?= $(CLANG)++
-CC ?= $(CLANG)
+release ?=      
+stats ?=        
+progress ?=    
+threads ?=     
+debug ?=        
+verbose ?=      
+junit_output ?= 
+static ?=       
 
-LLVM_PREFIX = $(shell $(LLVM_CONFIG) --prefix)
+O := .build
+SOURCES := $(shell find src -name '*.cr')
+SPEC_SOURCES := $(shell find spec -name '*.cr')
+override FLAGS += $(if $(release),--release )$(if $(stats),--stats )$(if $(progress),--progress )$(if $(threads),--threads $(threads) )$(if $(debug),-d )$(if $(static),--static )$(if $(LDFLAGS),--link-flags="$(LDFLAGS)" )$(if $(target),--cross-compile --target $(target) )
+SPEC_WARNINGS_OFF := --exclude-warnings spec/std --exclude-warnings spec/compiler
+SPEC_FLAGS := $(if $(verbose),-v )$(if $(junit_output),--junit_output $(junit_output) )
+CRYSTAL_CONFIG_LIBRARY_PATH := $(shell bin/crystal env CRYSTAL_LIBRARY_PATH 2> /dev/null)
+CRYSTAL_CONFIG_BUILD_COMMIT := $(shell git rev-parse --short HEAD 2> /dev/null)
+SOURCE_DATE_EPOCH := $(shell (git show -s --format=%ct HEAD || stat -c "%Y" Makefile || stat -f "%m" Makefile) 2> /dev/null)
+EXPORTS := \
+  CRYSTAL_CONFIG_LIBRARY_PATH="$(CRYSTAL_CONFIG_LIBRARY_PATH)" \
+  CRYSTAL_CONFIG_BUILD_COMMIT="$(CRYSTAL_CONFIG_BUILD_COMMIT)" \
+	SOURCE_DATE_EPOCH="$(SOURCE_DATE_EPOCH)"
+SHELL = sh
+LLVM_CONFIG := $(shell src/llvm/ext/find-llvm-config)
+LLVM_EXT_DIR = src/llvm/ext
+LLVM_EXT_OBJ = $(LLVM_EXT_DIR)/llvm_ext.o
+DEPS = $(LLVM_EXT_OBJ)
+CXXFLAGS += $(if $(debug),-g -O0)
+CRYSTAL_VERSION ?= $(shell cat src/VERSION)
 
-ifeq ($(wildcard $(LLVM_PREFIX)/bin/clang),)
-CLANG_PREFIX ?= $(dir $(CLANG))..
+ifeq ($(shell command -v ld.lld >/dev/null && uname -s),Linux)
+  EXPORT_CC ?= CC="cc -fuse-ld=lld"
+endif
+
+ifeq (${LLVM_CONFIG},)
+  $(error Could not locate compatible llvm-config, make sure it is installed and in your PATH, or set LLVM_CONFIG. Compatible versions: $(shell cat src/llvm/ext/llvm-versions.txt))
 else
-CLANG_PREFIX ?= $(LLVM_PREFIX)
+  $(shell echo $(shell printf '\033[33m')Using $(LLVM_CONFIG) [version=$(shell $(LLVM_CONFIG) --version)]$(shell printf '\033[0m') >&2)
 endif
 
-CUDA_HOME ?= /usr/local/cuda
-ENABLE_CUDA ?= $(shell test -e $(CUDA_HOME) && echo 1 || echo 0)
+.PHONY: all
+all: crystal 
 
-.SUFFIXES:
-.SECONDARY:
-UNAME := $(shell uname)
+.PHONY: help
+help: 
+	@echo
+	@printf '\033[34mtargets:\033[0m\n'
+	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) |\
+		sort |\
+		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@echo
+	@printf '\033[34moptional variables:\033[0m\n'
+	@grep -hE '^[a-zA-Z_-]+ \?=.*?## .*$$' $(MAKEFILE_LIST) |\
+		sort |\
+		awk 'BEGIN {FS = " \\?=.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
+	@echo
+	@printf '\033[34mrecipes:\033[0m\n'
+	@grep -hE '^##.*$$' $(MAKEFILE_LIST) |\
+		awk 'BEGIN {FS = "## "}; /^## [a-zA-Z_-]/ {printf "  \033[36m%s\033[0m\n", $$2}; /^##  / {printf "  %s\n", $$2}'
 
+.PHONY: spec
+spec: $(O)/all_spec 
+	$(O)/all_spec $(SPEC_FLAGS)
 
-AR = ar
-LD = ld
-FLAGS += -Wall -g -fPIC
-LFLAGS = -g
+.PHONY: std_spec
+std_spec: $(O)/std_spec 
+	$(O)/std_spec $(SPEC_FLAGS)
 
-SED_E = sed -E
-ifeq ($(shell sed -E '' </dev/null >/dev/null 2>&1 && echo yes || echo no),no)
-SED_E = sed -r
-endif
+.PHONY: compiler_spec
+compiler_spec: $(O)/compiler_spec 
+	$(O)/compiler_spec $(SPEC_FLAGS)
 
-ATOMLANG_VERSION_RAW=$(shell git describe --tags 2>/dev/null || echo unknown)
-ATOMLANG_VERSION=$(shell echo "$(ATOMLANG_VERSION_RAW)" | $(SED_E) 's/^release-//')
-FLAGS += -DATOMLANG_VERSION_STRING="\"$(ATOMLANG_VERSION)\""
+.PHONY: smoke_test 
+smoke_test: $(O)/std_spec $(O)/compiler_spec $(O)/crystal
 
-LUAJIT_VERSION_BASE ?= 2.1
-LUAJIT_VERSION_EXTRA ?= .0-beta3
-LUAJIT_VERSION ?= LuaJIT-$(LUAJIT_VERSION_BASE)$(LUAJIT_VERSION_EXTRA)
-LUAJIT_EXECUTABLE ?= luajit-$(LUAJIT_VERSION_BASE)$(LUAJIT_VERSION_EXTRA)
-LUAJIT_COMMIT ?= 9143e86498436892cb4316550be4d45b68a61224
-ifneq ($(strip $(LUAJIT_COMMIT)),)
-LUAJIT_URL ?= https://github.com/LuaJIT/LuaJIT/archive/$(LUAJIT_COMMIT).tar.gz
-LUAJIT_TAR ?= LuaJIT-$(LUAJIT_COMMIT).tar.gz
-LUAJIT_DIR ?= build/LuaJIT-$(LUAJIT_COMMIT)
-else
-LUAJIT_URL ?= http://luajit.org/download/$(LUAJIT_VERSION).tar.gz
-LUAJIT_TAR ?= $(LUAJIT_VERSION).tar.gz
-LUAJIT_DIR ?= build/$(LUAJIT_VERSION)
-endif
-LUAJIT_LIB ?= $(LUAJIT_PREFIX)/lib/libluajit-5.1.a
-LUAJIT_INCLUDE ?= $(dir $(shell ls 2>/dev/null $(LUAJIT_PREFIX)/include/luajit-$(LUAJIT_VERSION_BASE)/lua.h || ls 2>/dev/null $(LUAJIT_PREFIX)/include/lua.h || echo $(LUAJIT_PREFIX)/include/luajit-$(LUAJIT_VERSION_BASE)/lua.h))
-LUAJIT ?= $(LUAJIT_PREFIX)/bin/$(LUAJIT_EXECUTABLE)
+.PHONY: docs
+docs:
+	./bin/crystal docs src/docs_main.cr $(DOCS_OPTIONS) --project-name=Crystal --project-version=$(CRYSTAL_VERSION) --source-refname=$(CRYSTAL_CONFIG_BUILD_COMMIT)
 
-FLAGS += -I build -I $(LUAJIT_INCLUDE) -I release/include/atomlang  -I $(shell $(LLVM_CONFIG) --includedir) -I $(CLANG_PREFIX)/include
+.PHONY: crystal
+crystal: $(O)/crystal
 
-FLAGS += -D_GNU_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS -O0 -fno-common -Wcast-qual
-CPPFLAGS = -fno-rtti -Woverloaded-virtual -fvisibility-inlines-hidden
+.PHONY: deps llvm_ext
+deps: $(DEPS) 
+llvm_ext: $(LLVM_EXT_OBJ)
 
-LLVM_VERSION_NUM=$(shell $(LLVM_CONFIG) --version | sed -e s/svn//)
-LLVM_VERSION=$(shell echo $(LLVM_VERSION_NUM) | $(SED_E) 's/^([0-9]+)\.([0-9]+).*/\1\2/')
-LLVMVERGT4 := $(shell expr $(LLVM_VERSION) \>= 40)
+$(O)/all_spec: $(DEPS) $(SOURCES) $(SPEC_SOURCES)
+	@mkdir -p $(O)
+	$(EXPORT_CC) $(EXPORTS) ./bin/crystal build $(FLAGS) $(SPEC_WARNINGS_OFF) -o $@ spec/all_spec.cr
 
-FLAGS += -DLLVM_VERSION=$(LLVM_VERSION)
+$(O)/std_spec: $(DEPS) $(SOURCES) $(SPEC_SOURCES)
+	@mkdir -p $(O)
+	$(EXPORT_CC) ./bin/crystal build $(FLAGS) $(SPEC_WARNINGS_OFF) -o $@ spec/std_spec.cr
 
-LLVM_NEEDS_CXX14="100 110 111 120"
-ifneq (,$(findstring $(LLVM_VERSION),$(LLVM_NEEDS_CXX14)))
-CPPFLAGS += -std=c++1y 
-else
-CPPFLAGS += -std=c++11
-endif
+$(O)/compiler_spec: $(DEPS) $(SOURCES) $(SPEC_SOURCES)
+	@mkdir -p $(O)
+	$(EXPORT_CC) $(EXPORTS) ./bin/crystal build $(FLAGS) $(SPEC_WARNINGS_OFF) -o $@ spec/compiler_spec.cr
 
-ifneq ($(findstring $(UNAME), Linux FreeBSD),)
-DYNFLAGS = -shared -fPIC
-ATOMLANG_STATIC_LIBRARY += -Wl,-export-dynamic -Wl,--whole-archive $(LIBRARY) -Wl,--no-whole-archive
-else
-DYNFLAGS = -dynamiclib -single_module -fPIC -install_name "@rpath/atomlang.dylib"
-ATOMLANG_STATIC_LIBRARY =  -Wl,-force_load,$(LIBRARY)
-endif
+$(O)/crystal: $(DEPS) $(SOURCES)
+	@mkdir -p $(O)
+	$(EXPORTS) ./bin/crystal build $(FLAGS) -o $@ src/compiler/crystal.cr -D without_openssl -D without_zlib
 
-CLANG_LIBS += libclangFrontend.a \
-	libclangDriver.a \
-	libclangSerialization.a \
-	libclangCodeGen.a \
-	libclangParse.a \
-	libclangSema.a \
-	libclangAnalysis.a \
-	libclangEdit.a \
-	libclangAST.a \
-	libclangLex.a \
-	libclangBasic.a
+$(LLVM_EXT_OBJ): $(LLVM_EXT_DIR)/llvm_ext.cc
+	$(CXX) -c $(CXXFLAGS) -o $@ $< $(shell $(LLVM_CONFIG) --cxxflags)
 
-CLANG_AST_MATCHERS = "80 90 100 110 111 120"
-ifneq (,$(findstring $(LLVM_VERSION),$(CLANG_AST_MATCHERS)))
-CLANG_LIBS += libclangASTMatchers.a
-endif
+.PHONY: clean
+clean: clean_crystal 
+	rm -rf $(LLVM_EXT_OBJ)
 
-CLANG_LIBFILES := $(patsubst %, $(CLANG_PREFIX)/lib/%, $(CLANG_LIBS))
+.PHONY: clean_crystal
+clean_crystal: 
+	rm -rf $(O)
+	rm -rf ./docs
 
-ifeq "$(LLVMVERGT4)" "1"
-    LLVM_LIBS += $(shell $(LLVM_CONFIG) --libs --link-static)
-	LLVM_LIBFILES := $(shell $(LLVM_CONFIG) --libfiles --link-static)
-else
-	LLVM_LIBS += $(shell $(LLVM_CONFIG) --libs)
-	LLVM_LIBFILES := $(shell $(LLVM_CONFIG) --libfiles)
-endif
-
-LLVM_POLLY = "100 110 111 120"
-ifneq (,$(findstring $(LLVM_VERSION),$(LLVM_POLLY)))
-	LLVM_LIBFILES += $(shell $(LLVM_CONFIG) --libdir)/libPolly*.a
-endif
-
-ifeq ($(shell nm $(LLVM_PREFIX)/lib/libLLVMSupport.a | grep setupterm >/dev/null 2>&1; echo $$?), 0)
-    SUPPORT_LIBRARY_FLAGS += -lcurses 
-endif
-ifeq ($(shell nm $(LLVM_PREFIX)/lib/libLLVMSupport.a | grep compress2 >/dev/null 2>&1; echo $$?), 0)
-    SUPPORT_LIBRARY_FLAGS += -lz
-endif
-
-ifeq ($(UNAME), Linux)
-SUPPORT_LIBRARY_FLAGS += -ldl -pthread
-endif
-ifeq ($(UNAME), FreeBSD)
-SUPPORT_LIBRARY_FLAGS += -lexecinfo -pthread
-endif
-
-SUPPORT_LIBRARY_FLAGS += -lffi -ledit -lxml2
-
-PACKAGE_DEPS += $(LUAJIT_LIB)
-
-ifeq ($(UNAME), Darwin)
-LFLAGS += -pagezero_size 10000 -image_base 100000000 
-endif
-
-CLANG_RESOURCE_DIRECTORY=$(CLANG_PREFIX)/lib/clang/$(LLVM_VERSION_NUM)
-
-ifeq ($(ENABLE_CUDA),1)
-CUDA_INCLUDES = -DATOMLANG_ENABLE_CUDA -I $(CUDA_HOME)/include -I $(CUDA_HOME)/nvvm/include
-FLAGS += $(CUDA_INCLUDES)
-endif
-
-ifeq (OFF,$(shell $(LLVM_CONFIG) --assertion-mode))
-FLAGS += -DATOMLANG_LLVM_HEADERS_HAVE_NDEBUG
-endif
-
-LIBOBJS = tkind.o tcompiler.o tllvmutil.o tcwrapper.o tinline.o atomlang.o lparser.o lstring.o lobject.o lzio.o llex.o lctype.o treadnumber.o tcuda.o tdebug.o tinternalizedfiles.o lj_strscan.o
-LIBLUA = atomlanglib.lua strict.lua cudalib.lua asdl.lua atomlanglist.lua
-
-EXEOBJS = main.o linenoise.o
-
-EMBEDDEDLUA = $(addprefix build/,$(LIBLUA:.lua=.h))
-GENERATEDHEADERS = $(EMBEDDEDLUA) build/internalizedfiles.h
-
-LUAHEADERS = lua.h lualib.h lauxlib.h luaconf.h
-
-OBJS = $(LIBOBJS) $(EXEOBJS)
-
-EXECUTABLE = release/bin/atomlang
-LIBRARY = release/lib/libatomlang.a
-LIBRARY_NOLUA = release/lib/libatomlang_nolua.a
-LIBRARY_NOLUA_NOLLVM = release/lib/libatomlang_nolua_nollvm.a
-LIBRARY_VARIANTS = $(LIBRARY_NOLUA) $(LIBRARY_NOLUA_NOLLVM)
-ifeq ($(UNAME), Darwin)
-DYNLIBRARY = release/lib/atomlang.dylib
-else
-DYNLIBRARY = release/lib/atomlang.so
-endif
-RELEASE_HEADERS = $(addprefix release/include/atomlang/,$(LUAHEADERS))
-BIN2C = build/bin2c
-
--include Makefile.inc
-
-.PHONY:	all clean download purge test release install
-all:	$(EXECUTABLE) $(DYNLIBRARY)
-
-test:	all
-	(cd tests; ./run)
-
-variants:	$(LIBRARY_VARIANTS)
-
-build/%.o:	src/%.cpp $(PACKAGE_DEPS)
-	$(CXX) $(FLAGS) $(CPPFLAGS) $< -c -o $@
-
-build/%.o:	src/%.c $(PACKAGE_DEPS)
-	$(CC) $(FLAGS) $< -c -o $@
-
-download: build/$(LUAJIT_TAR)
-
-build/$(LUAJIT_TAR):
-ifeq ($(UNAME), Darwin)
-	curl -L $(LUAJIT_URL) -o build/$(LUAJIT_TAR)
-else
-	wget $(LUAJIT_URL) -O build/$(LUAJIT_TAR)
-endif
-
-build/lib/libluajit-5.1.a: build/$(LUAJIT_TAR)
-	(cd build; tar -xf $(LUAJIT_TAR))
-	# MACOSX_DEPLOYMENT_TARGET is a workaround for https://github.com/LuaJIT/LuaJIT/issues/484
-	# see also https://github.com/LuaJIT/LuaJIT/issues/575
-	(cd $(LUAJIT_DIR); $(MAKE) install PREFIX=$(realpath build) CC=$(CC) STATIC_CC="$(CC) -fPIC" XCFLAGS=-DLUAJIT_ENABLE_GC64 MACOSX_DEPLOYMENT_TARGET=10.7)
-
-release/include/atomlang/%.h:  $(LUAJIT_INCLUDE)/%.h $(LUAJIT_LIB) 
-	cp $(LUAJIT_INCLUDE)/$*.h $@
-    
-build/llvm_objects/llvm_list:    $(addprefix build/, $(LIBOBJS) $(EXEOBJS))
-	mkdir -p build/llvm_objects/luajit
-	# Extract Luajit + all LLVM & Clang libraries
-	cd build/llvm_objects; for lib in $(LUAJIT_LIB) $(LLVM_LIBFILES) $(CLANG_LIBFILES); do \
-		echo Extracing objects from $$lib; \
-		DIR=$$(basename $$lib .a); \
-		mkdir -p $$DIR; \
-		cd $$DIR; \
-		ar x $$lib; \
-		cd ..; \
-	done
-
-build/lua_objects/lj_obj.o:    $(LUAJIT_LIB)
-	mkdir -p build/lua_objects
-	cd build/lua_objects; ar x $(realpath $(LUAJIT_LIB))
-
-$(LIBRARY):	$(RELEASE_HEADERS) $(addprefix build/, $(LIBOBJS)) build/llvm_objects/llvm_list build/lua_objects/lj_obj.o
-	mkdir -p release/lib
-	rm -f $@
-	$(AR) -cq $@ $(addprefix build/, $(LIBOBJS)) build/llvm_objects/*/*.o build/lua_objects/*.o
-	ranlib $@
-
-$(LIBRARY_NOLUA): 	$(RELEASE_HEADERS) $(addprefix build/, $(LIBOBJS)) build/llvm_objects/llvm_list
-	mkdir -p release/lib
-	rm -f $@
-	$(AR) -cq $@ $(addprefix build/, $(LIBOBJS)) build/llvm_objects/*/*.o
-
-$(LIBRARY_NOLUA_NOLLVM):	$(RELEASE_HEADERS) $(addprefix build/, $(LIBOBJS))
-	mkdir -p release/lib
-	rm -f $@
-	$(AR) -cq $@ $(addprefix build/, $(LIBOBJS))
-
-$(DYNLIBRARY):	$(LIBRARY)
-	$(CXX) $(DYNFLAGS) $(ATOMLANG_STATIC_LIBRARY) $(SUPPORT_LIBRARY_FLAGS) -o $@  
-
-$(EXECUTABLE):	$(addprefix build/, $(EXEOBJS)) $(LIBRARY)
-	mkdir -p release/bin release/lib
-	$(CXX) $(addprefix build/, $(EXEOBJS)) -o $@ $(LFLAGS) $(ATOMLANG_STATIC_LIBRARY)  $(SUPPORT_LIBRARY_FLAGS)
-	if [ ! -e atomlang  ]; then ln -s $(EXECUTABLE) atomlang; fi;
-
-$(BIN2C):	src/bin2c.c
-	$(CC) -O3 -o $@ $<
-
-
-build/%.bc:	src/%.lua $(PACKAGE_DEPS)
-	$(LUAJIT) -bg $< $@
-build/%.h:	build/%.bc $(PACKAGE_DEPS)
-	$(LUAJIT) src/genheader.lua $< $@
-
-build/internalizedfiles.h:	$(PACKAGE_DEPS) src/geninternalizedfiles.lua lib/std.t lib/parsing.t
-	$(LUAJIT) src/geninternalizedfiles.lua $@  $(CLANG_RESOURCE_DIRECTORY) "%.h$$" $(CLANG_RESOURCE_DIRECTORY) "%.modulemap$$" lib "%.t$$" 
-
-clean:
-	rm -rf build/*.o build/*.d $(GENERATEDHEADERS)
-	rm -rf $(EXECUTABLE) atomlang $(LIBRARY) $(LIBRARY_NOLUA) $(LIBRARY_NOLUA_NOLLVM) $(DYNLIBRARY) $(RELEASE_HEADERS) build/llvm_objects build/lua_objects
-
-purge:	clean
-	rm -rf build/*
-
-ATOMLANG_SHARE_PATH=release/share/atomlang
-
-RELEASE_NAME := atomlang-`uname | sed -e s/Darwin/OSX/ | sed -e s/CYGWIN.*/Windows/`-`uname -m`-`git rev-parse --short HEAD`
-release:
-	for i in `git ls-tree HEAD -r tests --name-only`; do mkdir -p $(ATOMLANG_SHARE_PATH)/`dirname $$i`; cp $$i $(ATOMLANG_SHARE_PATH)/$$i; done;
-	mv release $(RELEASE_NAME)
-	zip -q -r $(RELEASE_NAME).zip $(RELEASE_NAME)
-	mv $(RELEASE_NAME) release
-
-PREFIX ?= /usr/local
-install: all
-	cp -R release/* $(PREFIX)
-
-DEPENDENCIES = $(patsubst %.o,build/%.d,$(OBJS))
-build/%.d:	src/%.cpp $(PACKAGE_DEPS) $(GENERATEDHEADERS)
-	@$(CXX) $(FLAGS) $(CPPFLAGS) -w -MM -MT '$@ $(@:.d=.o)' $< -o $@
-build/%.d:	src/%.c $(PACKAGE_DEPS) $(GENERATEDHEADERS)
-	@$(CC) $(FLAGS) -w -MM -MT '$@ $(@:.d=.o)' $< -o $@
-
-ifeq ($(findstring $(MAKECMDGOALS),download purge clean release),)
--include $(DEPENDENCIES)
-endif
+.PHONY: clean_cache
+clean_cache: 
+	rm -rf $(shell ./bin/crystal env CRYSTAL_CACHE_DIR)
